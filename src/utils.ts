@@ -1,10 +1,6 @@
-import { existsSync, lstatSync, readdirSync, readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { load } from 'js-yaml';
-import { join } from "path";
-import requireFromString from 'require-from-string';
-import * as pageUtils from './pageUtils';
-import { globalConfig } from './config';
-import { pope } from 'pope';
+import pWaitFor from 'p-wait-for';
 
 export function readFileAsObj(path: string) {
   if (!existsSync(path)) {
@@ -31,60 +27,50 @@ export function readFileAsObj(path: string) {
   return null;
 }
 
-interface GenerateReportConfig {
-  sqlsDir: string;
-  sqls?: string[];
-  customConfig?: any;
+export async function waitFor(mill: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      resolve();
+    }, mill);
+  });
 }
 
-export async function generateReport(config: GenerateReportConfig): Promise<string | null> {
-  const templateFile = join(__dirname, '../REPORT_TEMPLATE.html');
-  if (!existsSync(templateFile)) {
-    console.log('Template file not exists.');
-    return null;
+export async function waitUntil(func: () => boolean, options?: object): Promise<void> {
+  if (func()) return;
+  return pWaitFor(func, Object.assign({ interval: 1000 }, options));
+}
+
+interface rankDataResultItem<T> { 
+  item: T;
+  rank: number;
+  value: number;
+  rankDelta: number;
+  valueDelta: number;
+};
+export function rankData<T = any>(data: T[], iterArr: any[], getter: (item: T, iterItem: any, iterIndex: number) => number, itemIdentifiterGetter: (item: T, iterIndex: number) => any): Map<any, rankDataResultItem<T>[]> {
+  const result = new Map<any, rankDataResultItem<T>[]>();
+  const lastRankMap = new Map<any, { rank: number; value: number; }>();
+  data.forEach(i => lastRankMap.set(i, { rank: -1, value: 0 }));
+  for (let iterIndex = 0; iterIndex < iterArr.length; iterIndex++) {
+    const iterItem = iterArr[iterIndex];
+    const iterResult: any[] = [];
+    data = data.sort((a, b) => (getter(b, iterItem, iterIndex) ?? 0) - (getter(a, iterItem, iterIndex) ?? 0));
+    data.forEach((i: any, index) => {
+      const rank = getter(i, iterItem, iterIndex) ? index + 1 : -1;
+      const value = parseFloat((getter(i, iterItem, iterIndex) ?? 0).toFixed(2));
+      const lastRank = lastRankMap.get(i)!;
+      lastRankMap.set(i, { rank, value });
+
+      if (rank === -1) return;
+      iterResult.push({
+        item: itemIdentifiterGetter(i, iterIndex),
+        rank,
+        value,
+        rankDelta: lastRank.rank === -1 ? 0 : lastRank.rank - rank,
+        valueDelta: parseFloat((value - lastRank.value).toFixed(2)),
+      });
+    });
+    result.set(iterItem, iterResult);
   }
-  const templateContent = readFileSync(templateFile).toString();
-
-  if (!existsSync(config.sqlsDir)) {
-    console.log('Sqls folder not exists.');
-    return null;
-  }
-
-  const sqls = config.sqls || config.customConfig.sqls || readdirSync(config.sqlsDir);
-  let html = '', css = '', js = '';
-  for (const s of sqls) {
-    const dirPath = join(config.sqlsDir, s);
-    if (!lstatSync(dirPath).isDirectory()) {
-      continue;
-    }
-
-    const jsonConfigFile = join(dirPath, 'config.json');
-    const yamlConfigFile = join(dirPath, 'config.yaml');
-    const processFile = join(dirPath, 'processor.js');
-    if (!existsSync(processFile)) {
-      console.log(`Processor not exists for ${dirPath}`);
-      continue;
-    }
-    
-    let sqlConfig = readFileAsObj(jsonConfigFile) || readFileAsObj(yamlConfigFile) || {};
-
-    const processorFunc = requireFromString(readFileSync(processFile).toString());
-    const postResult: { html: string; css: string; js: string; } = await processorFunc({
-      ...sqlConfig,
-      ...config.customConfig,
-    }, pageUtils);
-
-    html += postResult.html;
-    css += postResult.css;
-    js += postResult.js;
-  }
-
-  const studyContent = pope(templateContent, {
-    html,
-    css,
-    js,
-    ...globalConfig.general,
-    ...config.customConfig,
-  });
-  return studyContent;
+  return result;
 }

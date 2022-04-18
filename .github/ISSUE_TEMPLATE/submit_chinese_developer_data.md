@@ -3,6 +3,7 @@ name: Submit Chinese developer labeled data
 about: Help us improve data quality
 ---
 
+
 <!-- Please help us help you by filling out the following sections as thoroughly as you can. If you have additional information, you can adjust the issue structure yourself -->
 
 I want to add some Chinese developer labeled data into OpenDigger to help us for our community analysis.

@@ -1,21 +1,30 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { readdirSync, statSync } from "fs";
 import path from "path";
 import { readFileAsObj } from "./utils";
 
-const labelInputFile = 'labeled_data';
-const labelOutputFile = 'auto_generated.json';
-const labelInputPath = path.join(path.resolve(), labelInputFile);
-
+const labelInputDir = '../labeled_data';
+const labelInputPath = path.join(__dirname, labelInputDir);
 
 const supportedTypes = new Set<string>([
   'Region', 'Company', 'Community', 'Project', 'Foundation'
 ]);
 
 const supportedKey = new Set<string>([
-  'label', 'github_repo', 'github_org',
+  'label', 'github_repo', 'github_org', 'github_user'
 ]);
+interface GitHubData {
+  githubRepos: number[],
+  githubOrgs: number[],
+  githubUsers: number[],
+}
 
-interface LabelItem {
+const emptyData: GitHubData = {
+  githubRepos: [],
+  githubOrgs: [],
+  githubUsers: [],
+};
+
+interface LabelItem extends GitHubData {
   identifier: string;
   content: {
     name: string;
@@ -23,41 +32,38 @@ interface LabelItem {
     data: any;
   },
   parsed: boolean;
-  githubRepos: number[],
-  githubOrgsOrUsers: number[],
 }
 
-interface ParsedLabelItem {
+interface ParsedLabelItem extends GitHubData {
   identifier: string;
   type: string;
   name: string;
-  githubRepos: number[],
-  githubOrgsOrUsers: number[],
 }
 
-export function parseLabelData() {
+export function getLabelData(): ParsedLabelItem[] {
   if (!statSync(labelInputPath).isDirectory()) {
     console.error(`${labelInputPath} input path is not a directory.`);
-    return;
+    return [];
   }
   const labelMap = new Map<string, LabelItem>();
+  const indexFileName = '/index.yml';
+  const labelFileSuffix = '.yml';
   readPath(labelInputPath, '', f => {
     if (!f.endsWith('.yml')) return;
-    const identifier = `:${(f.endsWith('/index.yml') ? f.slice(0, f.indexOf('/index.yml')) : f.slice(0, f.indexOf('.yml')))}`;
+    const identifier = `:${(f.endsWith(indexFileName) ? f.slice(0, f.indexOf(indexFileName)) : f.slice(0, f.indexOf(labelFileSuffix)))}`;
     const content = readFileAsObj(path.join(labelInputPath, f));
     labelMap.set(identifier, {
       identifier,
       content,
       parsed: false,
-      githubOrgsOrUsers: [],
+      githubOrgs: [],
       githubRepos: [],
+      githubUsers: [],
     });
   });
-  const parsedResult = processLabelItems(labelMap);
-  writeFileSync(path.join(labelInputPath, labelOutputFile), JSON.stringify(parsedResult));
+  const data = processLabelItems(labelMap);
+  return data;
 }
-
-parseLabelData();
 
 function readPath(p: string, base: string, fileProcessor: (f: string) => void) {
   if (!statSync(p).isDirectory()) {
@@ -79,7 +85,8 @@ function processLabelItems(map: Map<string, LabelItem>): ParsedLabelItem[] {
       type: item.content.type,
       name: item.content.name,
       githubRepos: Array.from(new Set(item.githubRepos)),
-      githubOrgsOrUsers: Array.from(new Set(item.githubOrgsOrUsers)),
+      githubOrgs: Array.from(new Set(item.githubOrgs)),
+      githubUsers: Array.from(new Set(item.githubUsers)),
     };
   });
 }
@@ -98,7 +105,10 @@ function parseItem(item: LabelItem, map: Map<string, LabelItem>) {
         item.githubRepos.push(...item.content.data[key]);
         break;
       case 'github_org':
-        item.githubOrgsOrUsers.push(...item.content.data[key]);
+        item.githubOrgs.push(...item.content.data[key]);
+        break;
+      case 'github_user':
+        item.githubUsers.push(...item.content.data[key]);
         break;
       case 'label':
         const labels: string[] = item.content.data[key];
@@ -111,8 +121,9 @@ function parseItem(item: LabelItem, map: Map<string, LabelItem>) {
           if (!innerItem.parsed) {
             parseItem(innerItem, map);
           }
-          item.githubOrgsOrUsers.push(...innerItem.githubOrgsOrUsers);
+          item.githubOrgs.push(...innerItem.githubOrgs);
           item.githubRepos.push(...innerItem.githubRepos);
+          item.githubUsers.push(...innerItem.githubUsers);
         }
         break;
       default:
@@ -122,29 +133,26 @@ function parseItem(item: LabelItem, map: Map<string, LabelItem>) {
   item.parsed = true;
 }
 
-export interface LabelOperationResult {
-  githubRepos: number[];
-  githubOrgsOrUsers: number[];
-}
-
-export function getLabelUnion(labels: string[]): LabelOperationResult {
-  const data = getLabelData();
+function labelDataToGitHubData(data: ParsedLabelItem[]): GitHubData {
   const repoSet = new Set<number>();
-  const orgOrUserSet = new Set<number>();
+  const orgSet = new Set<number>();
+  const userSet = new Set<number>();
   for (const item of data) {
-    if (labels.includes(item.identifier)) {
-      item.githubRepos.forEach(r => repoSet.add(r));
-      item.githubOrgsOrUsers.forEach(o => orgOrUserSet.add(o));
-    }
+    item.githubRepos.forEach(r => repoSet.add(r));
+    item.githubOrgs.forEach(o => orgSet.add(o));
+    item.githubUsers.forEach(u => userSet.add(u));
   }
   return {
     githubRepos: Array.from(repoSet),
-    githubOrgsOrUsers: Array.from(orgOrUserSet),
+    githubOrgs: Array.from(orgSet),
+    githubUsers: Array.from(userSet),
   };
 }
 
-function getLabelData(): ParsedLabelItem[] {
-  const dataPath = path.join(labelInputPath, labelOutputFile);
-  parseLabelData();
-  return JSON.parse(readFileSync(dataPath).toString());
+export function getGitHubData(typeOrIds: string[]): GitHubData {
+  if (typeOrIds.length === 0) return emptyData;
+  const data = getLabelData();
+  if (!data) return emptyData;
+  const arr = data.filter(i => typeOrIds.includes(i.type) || typeOrIds.includes(i.identifier));
+  return labelDataToGitHubData(arr);
 }
